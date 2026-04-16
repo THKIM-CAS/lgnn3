@@ -12,7 +12,7 @@ from .config import DatasetProfile
 @dataclass(frozen=True)
 class DataLoaders:
     train: DataLoader
-    val: DataLoader
+    val: DataLoader | None
     test: DataLoader
 
 
@@ -76,19 +76,32 @@ def build_dataloaders(
     full_train_eval = dataset_cls(root=root, train=True, download=True, transform=eval_transform)
     test_set = dataset_cls(root=root, train=False, download=True, transform=eval_transform)
 
-    total = len(full_train_aug)
-    val_size = max(1, int(total * val_fraction))
-    train_size = total - val_size
-    if train_size <= 0:
-        raise ValueError("validation fraction leaves no training samples")
+    if val_fraction < 0.0 or val_fraction >= 1.0:
+        raise ValueError("val_fraction must be in [0.0, 1.0)")
 
-    generator = torch.Generator().manual_seed(seed)
-    permutation = torch.randperm(total, generator=generator).tolist()
-    train_indices = permutation[:train_size]
-    val_indices = permutation[train_size:]
+    val_loader = None
+    if val_fraction == 0.0:
+        train_set = full_train_aug
+    else:
+        total = len(full_train_aug)
+        val_size = max(1, int(total * val_fraction))
+        train_size = total - val_size
+        if train_size <= 0:
+            raise ValueError("validation fraction leaves no training samples")
 
-    train_set = Subset(full_train_aug, train_indices)
-    val_set = Subset(full_train_eval, val_indices)
+        generator = torch.Generator().manual_seed(seed)
+        permutation = torch.randperm(total, generator=generator).tolist()
+        train_indices = permutation[:train_size]
+        val_indices = permutation[train_size:]
+
+        train_set = Subset(full_train_aug, train_indices)
+        val_set = Subset(full_train_eval, val_indices)
+        val_loader = _make_loader(
+            val_set,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+        )
 
     return DataLoaders(
         train=_make_loader(
@@ -97,12 +110,7 @@ def build_dataloaders(
             shuffle=True,
             num_workers=num_workers,
         ),
-        val=_make_loader(
-            val_set,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-        ),
+        val=val_loader,
         test=_make_loader(
             test_set,
             batch_size=batch_size,

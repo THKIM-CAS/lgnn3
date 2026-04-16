@@ -110,20 +110,24 @@ def main() -> None:
             "loss": running_loss / running_examples,
             "accuracy": running_correct / running_examples,
         }
-        val_continuous = evaluate(
-            model,
-            loaders.val,
-            device=device,
-            criterion=criterion,
-            discrete=False,
-        )
-        val_discrete = evaluate(
-            model,
-            loaders.val,
-            device=device,
-            criterion=criterion,
-            discrete=True,
-        )
+        if loaders.val is None:
+            val_continuous = None
+            val_discrete = None
+        else:
+            val_continuous = evaluate(
+                model,
+                loaders.val,
+                device=device,
+                criterion=criterion,
+                discrete=False,
+            )
+            val_discrete = evaluate(
+                model,
+                loaders.val,
+                device=device,
+                criterion=criterion,
+                discrete=True,
+            )
 
         epoch_metrics = {
             "epoch": epoch,
@@ -133,12 +137,19 @@ def main() -> None:
         }
         history.append(epoch_metrics)
 
-        print(
-            f"epoch={epoch} "
-            f"train_loss={train_metrics['loss']:.4f} train_acc={train_metrics['accuracy']:.4f} "
-            f"val_cont_loss={val_continuous['loss']:.4f} val_cont_acc={val_continuous['accuracy']:.4f} "
-            f"val_disc_loss={val_discrete['loss']:.4f} val_disc_acc={val_discrete['accuracy']:.4f}"
-        )
+        if val_continuous is None or val_discrete is None:
+            print(
+                f"epoch={epoch} "
+                f"train_loss={train_metrics['loss']:.4f} "
+                f"train_acc={train_metrics['accuracy']:.4f}"
+            )
+        else:
+            print(
+                f"epoch={epoch} "
+                f"train_loss={train_metrics['loss']:.4f} train_acc={train_metrics['accuracy']:.4f} "
+                f"val_cont_loss={val_continuous['loss']:.4f} val_cont_acc={val_continuous['accuracy']:.4f} "
+                f"val_disc_loss={val_discrete['loss']:.4f} val_disc_acc={val_discrete['accuracy']:.4f}"
+            )
 
         checkpoint = {
             "dataset": args.dataset,
@@ -164,8 +175,9 @@ def main() -> None:
         }
         save_checkpoint(run_dir / "last.pt", checkpoint)
 
-        if val_discrete["accuracy"] > best_discrete_val:
-            best_discrete_val = val_discrete["accuracy"]
+        metric_for_best = train_metrics["accuracy"] if val_discrete is None else val_discrete["accuracy"]
+        if metric_for_best > best_discrete_val:
+            best_discrete_val = metric_for_best
             save_checkpoint(run_dir / "best.pt", checkpoint)
 
     save_history(run_dir / "history.json", history)
