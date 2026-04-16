@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 
 from light_dlgn.config import get_dataset_profile
 from light_dlgn.data import build_dataloaders
-from light_dlgn.model import LightDLGN
+from light_dlgn.model import build_model
 from light_dlgn.train_utils import choose_device, evaluate, save_checkpoint, save_history, seed_everything
 
 
@@ -21,6 +21,7 @@ def parse_widths(raw: str | None, default: tuple[int, ...]) -> tuple[int, ...]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a fully-connected Light DLGN.")
+    parser.add_argument("--model", choices=["lightdlgn", "multiplexed"], default="lightdlgn")
     parser.add_argument("--dataset", choices=["mnist", "cifar10"], required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts"))
@@ -62,7 +63,8 @@ def main() -> None:
         seed=args.seed,
     )
 
-    model = LightDLGN(
+    model = build_model(
+        args.model,
         image_shape=profile.image_shape,
         num_classes=profile.num_classes,
         widths=widths,
@@ -77,6 +79,8 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss()
 
     run_dir = args.output_dir / args.dataset
+    if args.model != "lightdlgn":
+        run_dir = args.output_dir / args.model / args.dataset
     history: list[dict] = []
     best_discrete_val = float("-inf")
 
@@ -154,6 +158,7 @@ def main() -> None:
         checkpoint = {
             "dataset": args.dataset,
             "model_config": {
+                "model_type": args.model,
                 "image_shape": profile.image_shape,
                 "num_classes": profile.num_classes,
                 "widths": widths,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from .model import InputWiseLogicLayer, LightDLGN
+from .model import InputWiseLogicLayer, LightDLGN, build_model
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,11 @@ _TRUTH_TABLE_TO_EXPR: dict[tuple[int, int, int, int], str] = {
 def load_model_from_checkpoint(checkpoint_path: Path, *, device: str = "cpu") -> LightDLGN:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model_cfg = checkpoint["model_config"]
-    model = LightDLGN(
+    model_type = model_cfg.get("model_type", "lightdlgn")
+    if model_type != "lightdlgn":
+        raise ValueError(f"Verilog export only supports model_type='lightdlgn', got '{model_type}'")
+    model = build_model(
+        model_type,
         image_shape=tuple(model_cfg["image_shape"]),
         num_classes=model_cfg["num_classes"],
         widths=tuple(model_cfg["widths"]),

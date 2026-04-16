@@ -8,7 +8,7 @@ from torch import nn
 
 from light_dlgn.config import get_dataset_profile
 from light_dlgn.data import build_test_loader
-from light_dlgn.model import LightDLGN
+from light_dlgn.model import build_model
 from light_dlgn.train_utils import choose_device, evaluate
 
 
@@ -33,7 +33,8 @@ def main() -> None:
     profile = get_dataset_profile(dataset_name)
     model_cfg = checkpoint["model_config"]
 
-    model = LightDLGN(
+    model = build_model(
+        model_cfg.get("model_type", "lightdlgn"),
         image_shape=tuple(model_cfg["image_shape"]),
         num_classes=model_cfg["num_classes"],
         widths=tuple(model_cfg["widths"]),
