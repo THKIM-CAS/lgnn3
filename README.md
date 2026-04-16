@@ -39,6 +39,17 @@ uv run train.py --dataset cifar10 --widths 12000,12000,12000,12000 --epochs 50
 uv run train.py --dataset mnist --estimator sigmoid
 ```
 
+MultiplexedLightDLGN usage note:
+
+```bash
+uv run train.py --model multiplexed --dataset mnist --widths 256,16000,16000,16000
+```
+
+- In multiplexed mode, `--widths` is interpreted as `k,layer1,layer2,...`.
+- The first width `k` is the class-code width, so the model learns a trainable `num_classes x k` class-code matrix.
+- The remaining widths are the shared LightDLGN layer widths used by `f(input, weights_c)`.
+- Multiplexed checkpoints are written to `artifacts/multiplexed/<dataset>/` to avoid colliding with the default `LightDLGN` runs.
+
 Artifacts are written to `artifacts/<dataset>/`:
 
 - `best.pt`
