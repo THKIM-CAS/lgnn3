@@ -56,14 +56,41 @@ uv run test.py --checkpoint artifacts/cifar10/best.pt
 
 Use `--mode continuous`, `--mode discrete`, or `--mode both`.
 
+## Export Verilog
+
+Export a trained discrete model as a clock-less Verilog-2005 combinational module:
+
+```bash
+uv run export_verilog.py \
+  --checkpoint artifacts/paper/mnist/last.pt \
+  --output artifacts/paper/mnist_logic.v \
+  --module-name mnist_logic \
+  --verify-samples 32
+```
+
+Generated module interface:
+
+- `input [N-1:0] in_bits`
+- `output [G-1:0] class0_bits`, ..., `class9_bits`
+
+Usage notes:
+
+- The Verilog module expects the input image to be already thermometer-encoded and flattened.
+- Bit ordering matches `thermometer_encode()` in `src/light_dlgn/encoding.py`: the tensor is expanded along the threshold axis and then flattened.
+- The exporter emits only `wire` declarations and `assign` statements.
+- Each `class*_bits` bus is the raw final-layer bit group for that class. Popcount and argmax are intended to happen outside the generated module.
+- `--verify-samples` runs a Python-side equivalence check between the exported discrete gate netlist and the PyTorch discrete model on random thermo-encoded inputs before writing the final file.
+
 ## Project Layout
 
 ```text
 src/light_dlgn/model.py      # input-wise logic layers and classifier
 src/light_dlgn/data.py       # MNIST/CIFAR-10 loaders
 src/light_dlgn/config.py     # dataset presets
+src/light_dlgn/export_verilog.py  # discrete netlist to Verilog exporter
 train.py                     # training entry point
 test.py                      # evaluation entry point
+export_verilog.py            # Verilog export entry point
 ```
 
 ## Paper FCL Reference Models
