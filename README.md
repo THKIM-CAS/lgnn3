@@ -46,9 +46,11 @@ uv run train.py --model multiplexed --dataset mnist --widths 256,16000,16000,160
 ```
 
 - In multiplexed mode, `--widths` is interpreted as `k,layer1,layer2,...`.
-- The first width `k` is the class-code width, so the model learns a trainable `num_classes x k` class-code matrix.
-- The remaining widths are the shared LightDLGN layer widths used by `f(input, weights_c)`.
+- The first width `k` is the class-code width.
+- The model learns one trainable `num_classes x k` class-code matrix per shared logic layer, for a total class-code tensor shape of `num_layers x num_classes x k`.
+- The remaining widths are the shared LightDLGN layer widths; each layer receives its own per-class code concatenated to that layer's input.
 - Multiplexed checkpoints are written to `artifacts/multiplexed/<dataset>/` to avoid colliding with the default `LightDLGN` runs.
+- Forward compute diagram: [docs/multiplexed_light_dlgn_forward.md](/home/prof/lgnn3/docs/multiplexed_light_dlgn_forward.md)
 
 Artifacts are written to `artifacts/<dataset>/`:
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 import torch
 from torch import nn
@@ -191,6 +193,7 @@ class MultiplexedLightDLGN(nn.Module):
         self.widths = tuple(widths)
         self.class_code_dim = widths[0]
         self.shared_widths = tuple(widths[1:])
+        self.num_logic_layers = len(self.shared_widths)
         self.num_thresholds = num_thresholds
         self.tau = tau
         self.estimator = estimator
@@ -203,11 +206,11 @@ class MultiplexedLightDLGN(nn.Module):
         generator.manual_seed(seed)
 
         layers: list[nn.Module] = []
-        in_features = encoded_dim + self.class_code_dim
+        in_features = encoded_dim
         for width in self.shared_widths:
             layers.append(
                 InputWiseLogicLayer(
-                    in_features,
+                    in_features + self.class_code_dim,
                     width,
                     estimator=estimator,
                     residual_init=residual_init,
@@ -216,7 +219,9 @@ class MultiplexedLightDLGN(nn.Module):
             )
             in_features = width
 
-        self.class_code_logits = nn.Parameter(torch.empty(num_classes, self.class_code_dim))
+        self.class_code_logits = nn.Parameter(
+            torch.empty(self.num_logic_layers, num_classes, self.class_code_dim)
+        )
         self.logic_layers = nn.ModuleList(layers)
         self.group_sum = GroupSum(num_classes=1, tau=tau)
         self.reset_parameters()
@@ -231,6 +236,22 @@ class MultiplexedLightDLGN(nn.Module):
     def class_codes(self, *, discrete: bool) -> torch.Tensor:
         return _apply_estimator(self.class_code_logits, estimator=self.estimator, discrete=discrete)
 
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> nn.modules.module._IncompatibleKeys:
+        class_code_logits = state_dict.get("class_code_logits")
+        if isinstance(class_code_logits, torch.Tensor) and class_code_logits.dim() == 2:
+            raise RuntimeError(
+                "legacy multiplexed checkpoints are incompatible with the current architecture: "
+                "expected per-layer class_code_logits with shape "
+                "[num_logic_layers, num_classes, class_code_dim], but found the previous "
+                "single-matrix format [num_classes, class_code_dim]"
+            )
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
     def forward(self, x: torch.Tensor, *, discrete: bool | None = None) -> torch.Tensor:
         if discrete is None:
             discrete = not self.training
@@ -239,13 +260,15 @@ class MultiplexedLightDLGN(nn.Module):
         codes = self.class_codes(discrete=discrete)
 
         batch_size = encoded.size(0)
-        encoded_per_class = encoded.unsqueeze(1).expand(-1, self.num_classes, -1)
-        codes_per_example = codes.unsqueeze(0).expand(batch_size, -1, -1)
-        values = torch.cat((encoded_per_class, codes_per_example), dim=-1)
-        values = values.reshape(batch_size * self.num_classes, -1)
-
-        for layer in self.logic_layers:
-            values = layer(values, discrete=discrete)
+        values = encoded
+        for layer_index, layer in enumerate(self.logic_layers):
+            current_values = values.unsqueeze(1).expand(-1, self.num_classes, -1)
+            current_codes = codes[layer_index].unsqueeze(0).expand(batch_size, -1, -1)
+            layer_inputs = torch.cat((current_values, current_codes), dim=-1)
+            layer_inputs = layer_inputs.reshape(batch_size * self.num_classes, -1)
+            values = layer(layer_inputs, discrete=discrete)
+            if layer_index + 1 < self.num_logic_layers:
+                values = values.view(batch_size, self.num_classes, -1)
 
         logits = self.group_sum(values)
         return logits.view(batch_size, self.num_classes)
