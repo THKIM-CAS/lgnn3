@@ -262,7 +262,10 @@ class MultiplexedLightDLGN(nn.Module):
         batch_size = encoded.size(0)
         values = encoded
         for layer_index, layer in enumerate(self.logic_layers):
-            current_values = values.unsqueeze(1).expand(-1, self.num_classes, -1)
+            if values.dim() == 2:
+                current_values = values.unsqueeze(1).expand(-1, self.num_classes, -1)
+            else:
+                current_values = values
             current_codes = codes[layer_index].unsqueeze(0).expand(batch_size, -1, -1)
             layer_inputs = torch.cat((current_values, current_codes), dim=-1)
             layer_inputs = layer_inputs.reshape(batch_size * self.num_classes, -1)
