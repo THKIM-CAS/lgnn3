@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/light_dlgn/__init__.py
+src/light_dlgn/config.py
+src/light_dlgn/data.py
+src/light_dlgn/encoding.py
+src/light_dlgn/export_verilog.py
+src/light_dlgn/model.py
+src/light_dlgn/train_utils.py
+src/light_dlgn.egg-info/PKG-INFO
+src/light_dlgn.egg-info/SOURCES.txt
+src/light_dlgn.egg-info/dependency_links.txt
+src/light_dlgn.egg-info/requires.txt
+src/light_dlgn.egg-info/top_level.txt
+tests/test_multiplexed_model.py
