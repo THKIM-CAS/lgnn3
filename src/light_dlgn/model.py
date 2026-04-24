@@ -226,7 +226,11 @@ class ClassConditionedInputWiseLogicLayer(nn.Module):
                 self._code_coefficients(discrete),
             )
             selected_code = code.index_select(1, self.code_indices)
-            values[:, :count] = (1.0 - selected_code) * values[:, :count] + selected_code * conditioned
+            blended = (1.0 - selected_code) * values[:, :count] + selected_code * conditioned
+            if count == self.out_features:
+                values = blended
+            else:
+                values = torch.cat((blended, values[:, count:]), dim=1)
 
         return values
 

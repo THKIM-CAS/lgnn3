@@ -141,6 +141,25 @@ class MultiplexedLightDLGN2Tests(unittest.TestCase):
         self.assertEqual(tuple(continuous_logits.shape), (5, 3))
         self.assertEqual(tuple(discrete_logits.shape), (5, 3))
 
+    def test_backward_pass_handles_conditioned_gates(self) -> None:
+        model = MultiplexedLightDLGN2(
+            image_shape=(1, 2, 2),
+            num_classes=3,
+            widths=(4, 6, 9),
+            num_thresholds=2,
+            tau=1.0,
+            seed=0,
+            code_gate_fraction=0.75,
+        )
+        x = torch.rand(5, 1, 2, 2)
+        targets = torch.tensor([0, 1, 2, 0, 1])
+
+        loss = torch.nn.functional.cross_entropy(model(x, discrete=False), targets)
+        loss.backward()
+
+        self.assertIsNotNone(model.logic_layers[0].logits.grad)
+        self.assertIsNotNone(model.logic_layers[0].code_logits.grad)
+
     def test_build_model_supports_multiplexed2(self) -> None:
         model = build_model(
             "multiplexed2",
