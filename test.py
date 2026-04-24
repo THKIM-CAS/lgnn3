@@ -43,6 +43,7 @@ def main() -> None:
         estimator=model_cfg["estimator"],
         residual_init=model_cfg["residual_init"],
         seed=model_cfg["seed"],
+        code_gate_fraction=model_cfg.get("code_gate_fraction", 0.5),
     ).to(device)
     model.load_state_dict(checkpoint["model_state"])
 

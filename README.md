@@ -43,12 +43,15 @@ MultiplexedLightDLGN usage note:
 
 ```bash
 uv run train.py --model multiplexed --dataset mnist --widths 256,16000,16000,16000
+uv run train.py --model multiplexed2 --dataset mnist --widths 256,16000,16000,16000
+uv run train.py --model multiplexed2 --dataset mnist --widths 256,16000,16000,16000 --code-gate-fraction 0.75
 ```
 
 - In multiplexed mode, `--widths` is interpreted as `k,layer1,layer2,...`.
 - The first width `k` is the class-code width.
 - The model learns one trainable `num_classes x k` class-code matrix per shared logic layer, for a total class-code tensor shape of `num_layers x num_classes x k`.
 - The remaining widths are the shared LightDLGN layer widths; each layer receives its own per-class code concatenated to that layer's input.
+- `multiplexed2` uses fixed hard binary class codes and forces `--code-gate-fraction` of each shared layer's gates to read one class-code bit directly. The default is `0.5`.
 - Multiplexed checkpoints are written to `artifacts/multiplexed/<dataset>/` to avoid colliding with the default `LightDLGN` runs.
 - Forward compute diagram: [docs/multiplexed_light_dlgn_forward.md](/home/prof/lgnn3/docs/multiplexed_light_dlgn_forward.md)
 

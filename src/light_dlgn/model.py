@@ -31,6 +31,35 @@ def _apply_estimator(logits: torch.Tensor, *, estimator: str, discrete: bool) ->
     return omega
 
 
+def _make_fixed_binary_class_codes(
+    *,
+    num_layers: int,
+    num_classes: int,
+    code_dim: int,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    bits_needed = max(1, (num_classes - 1).bit_length())
+    if code_dim < bits_needed:
+        raise ValueError(
+            f"class-code width {code_dim} is too small for {num_classes} classes; "
+            f"need at least {bits_needed} bits for distinct fixed codes"
+        )
+
+    codes = torch.randint(
+        0,
+        2,
+        (num_layers, num_classes, code_dim),
+        generator=generator,
+        dtype=torch.float32,
+    )
+
+    class_ids = torch.arange(num_classes, dtype=torch.long)
+    bit_positions = torch.arange(bits_needed, dtype=torch.long)
+    id_bits = ((class_ids.unsqueeze(1) >> bit_positions) & 1).to(torch.float32)
+    codes[:, :, :bits_needed] = id_bits.unsqueeze(0)
+    return codes
+
+
 class InputWiseLogicLayer(nn.Module):
     """Binary-input DLGN layer using the paper's input-wise parametrization."""
 
@@ -88,6 +117,62 @@ class InputWiseLogicLayer(nn.Module):
             + left * (1.0 - right) * w10
             + left * right * w11
         )
+
+
+class ClassConditionedInputWiseLogicLayer(InputWiseLogicLayer):
+    """Input-wise logic layer with some gates forced to read a class-code bit."""
+
+    def __init__(
+        self,
+        data_features: int,
+        code_features: int,
+        out_features: int,
+        *,
+        code_gate_fraction: float = 0.5,
+        estimator: str = "sinusoidal",
+        residual_init: bool = True,
+        generator: torch.Generator | None = None,
+    ) -> None:
+        if data_features <= 0:
+            raise ValueError("data_features must be positive")
+        if code_features <= 0:
+            raise ValueError("code_features must be positive")
+        if not 0.0 <= code_gate_fraction <= 1.0:
+            raise ValueError("code_gate_fraction must be in [0, 1]")
+
+        self.data_features = data_features
+        self.code_features = code_features
+        self.code_gate_fraction = code_gate_fraction
+        super().__init__(
+            data_features + code_features,
+            out_features,
+            estimator=estimator,
+            residual_init=residual_init,
+            generator=generator,
+        )
+
+        if code_gate_fraction == 0.0:
+            forced_count = 0
+        else:
+            forced_count = max(1, math.ceil(out_features * code_gate_fraction))
+        self.forced_code_gate_count = forced_count
+
+        forced_mask = torch.zeros(out_features, dtype=torch.bool)
+        if forced_count:
+            forced_mask[:forced_count] = True
+            self.left_indices[:forced_count] = torch.randint(
+                0,
+                data_features,
+                (forced_count,),
+                generator=generator,
+            )
+            self.right_indices[:forced_count] = data_features + torch.randint(
+                0,
+                code_features,
+                (forced_count,),
+                generator=generator,
+            )
+        self.register_buffer("forced_code_gate_mask", forced_mask, persistent=True)
 
 
 class GroupSum(nn.Module):
@@ -277,6 +362,109 @@ class MultiplexedLightDLGN(nn.Module):
         return logits.view(batch_size, self.num_classes)
 
 
+class MultiplexedLightDLGN2(nn.Module):
+    def __init__(
+        self,
+        image_shape: tuple[int, int, int],
+        num_classes: int,
+        widths: tuple[int, ...],
+        *,
+        num_thresholds: int,
+        tau: float,
+        estimator: str = "sinusoidal",
+        residual_init: bool = True,
+        seed: int = 0,
+        code_gate_fraction: float = 0.5,
+    ) -> None:
+        super().__init__()
+        if len(widths) < 2:
+            raise ValueError(
+                "multiplexed2 widths must include the class-code width followed by at least one logic-layer width"
+            )
+        if widths[0] <= 0:
+            raise ValueError("class-code width must be positive")
+
+        self.image_shape = image_shape
+        self.num_classes = num_classes
+        self.widths = tuple(widths)
+        self.class_code_dim = widths[0]
+        self.shared_widths = tuple(widths[1:])
+        self.num_logic_layers = len(self.shared_widths)
+        self.num_thresholds = num_thresholds
+        self.tau = tau
+        self.estimator = estimator
+        self.residual_init = residual_init
+        self.code_gate_fraction = code_gate_fraction
+
+        encoded_dim = math.prod(image_shape) * num_thresholds
+        self.register_buffer("thresholds", make_thresholds(num_thresholds), persistent=True)
+
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+        code_generator = torch.Generator()
+        code_generator.manual_seed(seed + 1)
+        self.register_buffer(
+            "fixed_class_codes",
+            _make_fixed_binary_class_codes(
+                num_layers=self.num_logic_layers,
+                num_classes=num_classes,
+                code_dim=self.class_code_dim,
+                generator=code_generator,
+            ),
+            persistent=True,
+        )
+
+        layers: list[nn.Module] = []
+        in_features = encoded_dim
+        for width in self.shared_widths:
+            layers.append(
+                ClassConditionedInputWiseLogicLayer(
+                    in_features,
+                    self.class_code_dim,
+                    width,
+                    code_gate_fraction=code_gate_fraction,
+                    estimator=estimator,
+                    residual_init=residual_init,
+                    generator=generator,
+                )
+            )
+            in_features = width
+
+        self.logic_layers = nn.ModuleList(layers)
+        self.group_sum = GroupSum(num_classes=1, tau=tau)
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return thermometer_encode(x, self.thresholds)
+
+    def class_codes(self, *, discrete: bool) -> torch.Tensor:
+        return self.fixed_class_codes
+
+    def forward(self, x: torch.Tensor, *, discrete: bool | None = None) -> torch.Tensor:
+        if discrete is None:
+            discrete = not self.training
+
+        encoded = self.encode(x)
+        codes = self.class_codes(discrete=discrete)
+
+        batch_size = encoded.size(0)
+        values = encoded
+        for layer_index, layer in enumerate(self.logic_layers):
+            if values.dim() == 2:
+                current_values = values.unsqueeze(1).expand(-1, self.num_classes, -1)
+            else:
+                current_values = values
+            current_codes = codes[layer_index].unsqueeze(0).expand(batch_size, -1, -1)
+            layer_inputs = torch.cat((current_values, current_codes), dim=-1)
+            layer_inputs = layer_inputs.reshape(batch_size * self.num_classes, -1)
+            values = layer(layer_inputs, discrete=discrete)
+            if layer_index + 1 < self.num_logic_layers:
+                values = values.view(batch_size, self.num_classes, -1)
+
+        logits = self.group_sum(values)
+        return logits.view(batch_size, self.num_classes)
+
+
 def build_model(
     model_type: str,
     *,
@@ -288,6 +476,7 @@ def build_model(
     estimator: str = "sinusoidal",
     residual_init: bool = True,
     seed: int = 0,
+    code_gate_fraction: float = 0.5,
 ) -> nn.Module:
     kwargs = {
         "image_shape": image_shape,
@@ -303,4 +492,6 @@ def build_model(
         return LightDLGN(**kwargs)
     if model_type == "multiplexed":
         return MultiplexedLightDLGN(**kwargs)
+    if model_type == "multiplexed2":
+        return MultiplexedLightDLGN2(**kwargs, code_gate_fraction=code_gate_fraction)
     raise ValueError(f"unsupported model_type '{model_type}'")

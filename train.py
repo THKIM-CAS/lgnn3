@@ -21,7 +21,11 @@ def parse_widths(raw: str | None, default: tuple[int, ...]) -> tuple[int, ...]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a fully-connected Light DLGN.")
-    parser.add_argument("--model", choices=["lightdlgn", "multiplexed"], default="lightdlgn")
+    parser.add_argument(
+        "--model",
+        choices=["lightdlgn", "multiplexed", "multiplexed2"],
+        default="lightdlgn",
+    )
     parser.add_argument("--dataset", choices=["mnist", "cifar10"], required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts"))
@@ -37,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--estimator", choices=["sinusoidal", "sigmoid"], default="sinusoidal")
     parser.add_argument("--disable-residual-init", action="store_true")
+    parser.add_argument(
+        "--code-gate-fraction",
+        type=float,
+        default=0.5,
+        help="fraction of gates forced to read class-code bits for multiplexed2",
+    )
     return parser
 
 
@@ -73,6 +83,7 @@ def main() -> None:
         estimator=args.estimator,
         residual_init=not args.disable_residual_init,
         seed=args.seed,
+        code_gate_fraction=args.code_gate_fraction,
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0)
@@ -167,6 +178,7 @@ def main() -> None:
                 "estimator": args.estimator,
                 "residual_init": not args.disable_residual_init,
                 "seed": args.seed,
+                "code_gate_fraction": args.code_gate_fraction,
             },
             "train_config": {
                 "epochs": epochs,
