@@ -119,8 +119,8 @@ class InputWiseLogicLayer(nn.Module):
         )
 
 
-class ClassConditionedInputWiseLogicLayer(InputWiseLogicLayer):
-    """Input-wise logic layer with some gates forced to read a class-code bit."""
+class ClassConditionedInputWiseLogicLayer(nn.Module):
+    """Input-wise logic layer with some gates explicitly conditioned on class code."""
 
     def __init__(
         self,
@@ -133,6 +133,7 @@ class ClassConditionedInputWiseLogicLayer(InputWiseLogicLayer):
         residual_init: bool = True,
         generator: torch.Generator | None = None,
     ) -> None:
+        super().__init__()
         if data_features <= 0:
             raise ValueError("data_features must be positive")
         if code_features <= 0:
@@ -142,14 +143,11 @@ class ClassConditionedInputWiseLogicLayer(InputWiseLogicLayer):
 
         self.data_features = data_features
         self.code_features = code_features
+        self.in_features = data_features + code_features
+        self.out_features = out_features
         self.code_gate_fraction = code_gate_fraction
-        super().__init__(
-            data_features + code_features,
-            out_features,
-            estimator=estimator,
-            residual_init=residual_init,
-            generator=generator,
-        )
+        self.estimator = estimator
+        self.residual_init = residual_init
 
         if code_gate_fraction == 0.0:
             forced_count = 0
@@ -157,22 +155,80 @@ class ClassConditionedInputWiseLogicLayer(InputWiseLogicLayer):
             forced_count = max(1, math.ceil(out_features * code_gate_fraction))
         self.forced_code_gate_count = forced_count
 
+        left = torch.randint(0, data_features, (out_features,), generator=generator)
+        right = torch.randint(0, data_features, (out_features,), generator=generator)
+        same = left == right
+        if same.any() and data_features > 1:
+            right[same] = (right[same] + 1) % data_features
+
+        self.register_buffer("left_indices", left, persistent=True)
+        self.register_buffer("right_indices", right, persistent=True)
+
         forced_mask = torch.zeros(out_features, dtype=torch.bool)
         if forced_count:
             forced_mask[:forced_count] = True
-            self.left_indices[:forced_count] = torch.randint(
-                0,
-                data_features,
-                (forced_count,),
-                generator=generator,
-            )
-            self.right_indices[:forced_count] = data_features + torch.randint(
-                0,
-                code_features,
-                (forced_count,),
-                generator=generator,
-            )
+        code_indices = torch.randint(0, code_features, (forced_count,), generator=generator)
         self.register_buffer("forced_code_gate_mask", forced_mask, persistent=True)
+        self.register_buffer("code_indices", code_indices, persistent=True)
+
+        self.logits = nn.Parameter(torch.empty(out_features, 4))
+        self.code_logits = nn.Parameter(torch.empty(forced_count, 4))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        with torch.no_grad():
+            if not self.residual_init:
+                nn.init.normal_(self.logits, mean=0.0, std=1.0)
+                nn.init.normal_(self.code_logits, mean=0.0, std=1.0)
+                return
+
+            mu, sigma = _heavy_tail_parameters(self.estimator)
+            means = torch.tensor([-mu, -mu, mu, mu], dtype=self.logits.dtype, device=self.logits.device)
+            self.logits.copy_(torch.randn_like(self.logits) * sigma + means)
+            self.code_logits.copy_(torch.randn_like(self.code_logits) * sigma + means)
+
+    def _coefficients(self, discrete: bool) -> torch.Tensor:
+        return _apply_estimator(self.logits, estimator=self.estimator, discrete=discrete)
+
+    def _code_coefficients(self, discrete: bool) -> torch.Tensor:
+        return _apply_estimator(self.code_logits, estimator=self.estimator, discrete=discrete)
+
+    @staticmethod
+    def _apply_binary_truth_table(
+        left: torch.Tensor,
+        right: torch.Tensor,
+        omega: torch.Tensor,
+    ) -> torch.Tensor:
+        w00 = omega[:, 0].unsqueeze(0)
+        w01 = omega[:, 1].unsqueeze(0)
+        w10 = omega[:, 2].unsqueeze(0)
+        w11 = omega[:, 3].unsqueeze(0)
+        return (
+            (1.0 - left) * (1.0 - right) * w00
+            + (1.0 - left) * right * w01
+            + left * (1.0 - right) * w10
+            + left * right * w11
+        )
+
+    def forward(self, x: torch.Tensor, *, discrete: bool = False) -> torch.Tensor:
+        data = x[:, : self.data_features]
+        code = x[:, self.data_features :]
+
+        left = data.index_select(1, self.left_indices)
+        right = data.index_select(1, self.right_indices)
+        values = self._apply_binary_truth_table(left, right, self._coefficients(discrete))
+
+        if self.forced_code_gate_count:
+            count = self.forced_code_gate_count
+            conditioned = self._apply_binary_truth_table(
+                left[:, :count],
+                right[:, :count],
+                self._code_coefficients(discrete),
+            )
+            selected_code = code.index_select(1, self.code_indices)
+            values[:, :count] = (1.0 - selected_code) * values[:, :count] + selected_code * conditioned
+
+        return values
 
 
 class GroupSum(nn.Module):

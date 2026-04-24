@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--code-gate-fraction",
         type=float,
         default=0.5,
-        help="fraction of gates forced to read class-code bits for multiplexed2",
+        help="fraction of gates with class-code-conditioned truth tables for multiplexed2",
     )
     return parser
 

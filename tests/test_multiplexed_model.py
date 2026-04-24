@@ -114,13 +114,15 @@ class MultiplexedLightDLGN2Tests(unittest.TestCase):
 
         self.assertEqual(first_layer.forced_code_gate_count, 5)
         self.assertTrue(torch.all(first_layer.left_indices[:5] < 8).item())
-        self.assertTrue(torch.all(first_layer.right_indices[:5] >= 8).item())
-        self.assertTrue(torch.all(first_layer.right_indices[:5] < 12).item())
+        self.assertTrue(torch.all(first_layer.right_indices[:5] < 8).item())
+        self.assertTrue(torch.all(first_layer.code_indices < 4).item())
+        self.assertEqual(tuple(first_layer.code_logits.shape), (5, 4))
 
         self.assertEqual(second_layer.forced_code_gate_count, 4)
         self.assertTrue(torch.all(second_layer.left_indices[:4] < 10).item())
-        self.assertTrue(torch.all(second_layer.right_indices[:4] >= 10).item())
-        self.assertTrue(torch.all(second_layer.right_indices[:4] < 14).item())
+        self.assertTrue(torch.all(second_layer.right_indices[:4] < 10).item())
+        self.assertTrue(torch.all(second_layer.code_indices < 4).item())
+        self.assertEqual(tuple(second_layer.code_logits.shape), (4, 4))
 
     def test_forward_shape_in_continuous_and_discrete_modes(self) -> None:
         model = MultiplexedLightDLGN2(
