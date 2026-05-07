@@ -43,17 +43,22 @@ class InputWiseLogicLayer(nn.Module):
         self.register_buffer("left_indices", left, persistent=True)
         self.register_buffer("right_indices", right, persistent=True)
         self.logits = nn.Parameter(torch.empty(out_features, 4))
-        self.reset_parameters()
+        self.reset_parameters(generator=generator)
 
-    def reset_parameters(self) -> None:
+    def reset_parameters(self, generator: torch.Generator | None = None) -> None:
         with torch.no_grad():
+            randn_kwargs = {"dtype": self.logits.dtype, "device": self.logits.device}
+            if generator is not None:
+                randn_kwargs["generator"] = generator
+
             if not self.residual_init:
-                nn.init.normal_(self.logits, mean=0.0, std=1.0)
+                samples = torch.randn(self.logits.shape, **randn_kwargs)
+                self.logits.copy_(samples)
                 return
 
             mu, sigma = _heavy_tail_parameters(self.estimator)
             means = torch.tensor([-mu, -mu, mu, mu], dtype=self.logits.dtype, device=self.logits.device)
-            samples = torch.randn_like(self.logits) * sigma + means
+            samples = torch.randn(self.logits.shape, **randn_kwargs) * sigma + means
             self.logits.copy_(samples)
 
     def _coefficients(self, discrete: bool) -> torch.Tensor:
@@ -159,3 +164,111 @@ class LightDLGN(nn.Module):
         for layer in self.logic_layers:
             x = layer(x, discrete=discrete)
         return self.group_sum(x)
+
+
+class LightDLGN2(nn.Module):
+    """Staged Light DLGN with per-class feedback reset."""
+
+    def __init__(
+        self,
+        image_shape: tuple[int, int, int],
+        num_classes: int,
+        steps_per_class: int,
+        population: int,
+        feedback_features: int,
+        step_widths: tuple[int, ...],
+        *,
+        num_thresholds: int,
+        tau: float,
+        estimator: str = "sinusoidal",
+        residual_init: bool = True,
+        seed: int = 0,
+    ) -> None:
+        super().__init__()
+        if steps_per_class <= 0:
+            raise ValueError("steps_per_class must be > 0")
+        if population <= 0:
+            raise ValueError("population must be > 0")
+        if feedback_features < 0:
+            raise ValueError("feedback_features must be >= 0")
+        if not step_widths:
+            raise ValueError("step_widths must not be empty")
+
+        encoded_dim = math.prod(image_shape) * num_thresholds
+        if encoded_dim % steps_per_class != 0:
+            raise ValueError("encoded input dimension must be divisible by steps_per_class")
+
+        final_width = feedback_features + population
+        if step_widths[-1] != final_width:
+            raise ValueError("last step width must equal feedback_features + population")
+
+        self.image_shape = image_shape
+        self.num_classes = num_classes
+        self.steps_per_class = steps_per_class
+        self.population = population
+        self.feedback_features = feedback_features
+        self.step_widths = tuple(step_widths)
+        self.num_thresholds = num_thresholds
+        self.tau = tau
+        self.estimator = estimator
+        self.residual_init = residual_init
+        self.encoded_dim = encoded_dim
+        self.partition_features = encoded_dim // steps_per_class
+
+        self.register_buffer("thresholds", make_thresholds(num_thresholds), persistent=True)
+
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+        layers: list[nn.Module] = []
+        in_features = self.partition_features + feedback_features
+        for width in step_widths:
+            layers.append(
+                InputWiseLogicLayer(
+                    in_features,
+                    width,
+                    estimator=estimator,
+                    residual_init=residual_init,
+                    generator=generator,
+                )
+            )
+            in_features = width
+
+        self.step_layers = nn.ModuleList(layers)
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return thermometer_encode(x, self.thresholds)
+
+    def _step(self, x: torch.Tensor, *, discrete: bool) -> torch.Tensor:
+        for layer in self.step_layers:
+            x = layer(x, discrete=discrete)
+        return x
+
+    def forward(self, x: torch.Tensor, *, discrete: bool | None = None) -> torch.Tensor:
+        if discrete is None:
+            discrete = not self.training
+
+        encoded = self.encode(x)
+        partitions = encoded.split(self.partition_features, dim=1)
+        logits: list[torch.Tensor] = []
+
+        for _class_index in range(self.num_classes):
+            feedback = encoded.new_zeros((encoded.size(0), self.feedback_features))
+            population = encoded.new_empty((encoded.size(0), self.population))
+
+            for partition in partitions:
+                if self.feedback_features > 0:
+                    step_input = torch.cat((partition, feedback), dim=1)
+                else:
+                    step_input = partition
+
+                step_output = self._step(step_input, discrete=discrete)
+                if self.feedback_features > 0:
+                    feedback = step_output[:, : self.feedback_features]
+                    population = step_output[:, self.feedback_features :]
+                else:
+                    population = step_output
+
+            logits.append(population.sum(dim=1))
+
+        return torch.stack(logits, dim=1) / self.tau
