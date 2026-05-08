@@ -8,7 +8,7 @@ from torch import nn
 
 from light_dlgn.config import get_dataset_profile
 from light_dlgn.data import build_test_loader
-from light_dlgn.model import LightDLGN
+from light_dlgn.model import LightDLGN, LightDLGN2
 from light_dlgn.train_utils import choose_device, evaluate
 
 
@@ -24,6 +24,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_model_from_checkpoint(checkpoint: dict) -> torch.nn.Module:
+    model_cfg = checkpoint["model_config"]
+    model_type = checkpoint.get("model_type", "LightDLGN")
+
+    if model_type == "LightDLGN":
+        return LightDLGN(
+            image_shape=tuple(model_cfg["image_shape"]),
+            num_classes=model_cfg["num_classes"],
+            widths=tuple(model_cfg["widths"]),
+            num_thresholds=model_cfg["num_thresholds"],
+            tau=model_cfg["tau"],
+            estimator=model_cfg["estimator"],
+            residual_init=model_cfg["residual_init"],
+            seed=model_cfg["seed"],
+        )
+
+    if model_type == "LightDLGN2":
+        return LightDLGN2(
+            image_shape=tuple(model_cfg["image_shape"]),
+            num_classes=model_cfg["num_classes"],
+            steps_per_class=model_cfg["steps_per_class"],
+            population=model_cfg["population"],
+            feedback_features=model_cfg["feedback_features"],
+            step_widths=tuple(model_cfg["step_widths"]),
+            num_thresholds=model_cfg["num_thresholds"],
+            tau=model_cfg["tau"],
+            estimator=model_cfg["estimator"],
+            residual_init=model_cfg["residual_init"],
+            seed=model_cfg["seed"],
+        )
+
+    raise ValueError(f"unsupported checkpoint model_type '{model_type}'")
+
+
 def main() -> None:
     args = build_parser().parse_args()
     device = choose_device(args.device)
@@ -31,18 +65,8 @@ def main() -> None:
 
     dataset_name = args.dataset or checkpoint["dataset"]
     profile = get_dataset_profile(dataset_name)
-    model_cfg = checkpoint["model_config"]
 
-    model = LightDLGN(
-        image_shape=tuple(model_cfg["image_shape"]),
-        num_classes=model_cfg["num_classes"],
-        widths=tuple(model_cfg["widths"]),
-        num_thresholds=model_cfg["num_thresholds"],
-        tau=model_cfg["tau"],
-        estimator=model_cfg["estimator"],
-        residual_init=model_cfg["residual_init"],
-        seed=model_cfg["seed"],
-    ).to(device)
+    model = build_model_from_checkpoint(checkpoint).to(device)
     model.load_state_dict(checkpoint["model_state"])
 
     loader = build_test_loader(

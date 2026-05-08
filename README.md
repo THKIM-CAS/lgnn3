@@ -97,6 +97,13 @@ uv run test.py --checkpoint artifacts/mnist/best.pt
 uv run test.py --checkpoint artifacts/cifar10/best.pt
 ```
 
+Evaluate a `LightDLGN2` checkpoint the same way:
+
+```bash
+uv run test.py --checkpoint artifacts/light_dlgn2/mnist/best.pt
+uv run test.py --checkpoint artifacts/light_dlgn2/cifar10/best.pt
+```
+
 Use `--mode continuous`, `--mode discrete`, or `--mode both`.
 
 ## Export Verilog
