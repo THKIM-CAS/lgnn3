@@ -61,7 +61,7 @@ uv run train2.py --dataset cifar10
 - `--steps-per-class`: number of input partitions processed for each class, default `4`
 - `--population`: output population per class, default `final profile width / num_classes`
 - `--feedback-features`: feedback state carried between partitions, default equal to `population`
-- `--step-widths`: comma-separated widths for the reused per-step logic stack
+- `--step-widths`: comma-separated widths for each class-specific per-step logic stack
 
 The final `--step-widths` value must equal `--feedback-features + --population`. If `--step-widths` is omitted, the script uses the dataset preset widths with the final width adjusted to satisfy that constraint.
 

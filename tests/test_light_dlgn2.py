@@ -72,6 +72,29 @@ class LightDLGN2Test(unittest.TestCase):
 
         self.assertEqual(tuple(logits.shape), (4, 3))
 
+    def test_class_step_layers_are_independent(self) -> None:
+        model = LightDLGN2(
+            image_shape=(1, 1, 1),
+            num_classes=2,
+            steps_per_class=1,
+            population=1,
+            feedback_features=0,
+            step_widths=(1,),
+            num_thresholds=1,
+            tau=1.0,
+            estimator="sigmoid",
+            seed=0,
+        )
+        with torch.no_grad():
+            model.step_layers[0][0].logits.fill_(-10.0)
+            model.step_layers[1][0].logits.fill_(10.0)
+
+        x = torch.ones(1, 1, 1, 1)
+
+        logits = model(x, discrete=True)
+
+        self.assertTrue(torch.equal(logits, torch.tensor([[0.0, 1.0]])))
+
     def test_feedback_resets_for_each_class(self) -> None:
         model = LightDLGN2(
             image_shape=(1, 1, 1),
@@ -85,18 +108,19 @@ class LightDLGN2Test(unittest.TestCase):
             estimator="sigmoid",
             seed=0,
         )
-        layer = model.step_layers[0]
         with torch.no_grad():
-            layer.left_indices.copy_(torch.tensor([0, 0]))
-            layer.right_indices.copy_(torch.tensor([1, 1]))
-            layer.logits.copy_(
-                torch.tensor(
-                    [
-                        [-10.0, -10.0, 10.0, 10.0],
-                        [-10.0, 10.0, -10.0, 10.0],
-                    ]
+            for class_layers in model.step_layers:
+                layer = class_layers[0]
+                layer.left_indices.copy_(torch.tensor([0, 0]))
+                layer.right_indices.copy_(torch.tensor([1, 1]))
+                layer.logits.copy_(
+                    torch.tensor(
+                        [
+                            [-10.0, -10.0, 10.0, 10.0],
+                            [-10.0, 10.0, -10.0, 10.0],
+                        ]
+                    )
                 )
-            )
 
         x = torch.ones(1, 1, 1, 1)
 

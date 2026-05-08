@@ -167,7 +167,7 @@ class LightDLGN(nn.Module):
 
 
 class LightDLGN2(nn.Module):
-    """Staged Light DLGN with per-class feedback reset."""
+    """Staged Light DLGN with class-specific step networks and per-class feedback reset."""
 
     def __init__(
         self,
@@ -220,27 +220,30 @@ class LightDLGN2(nn.Module):
         generator = torch.Generator()
         generator.manual_seed(seed)
 
-        layers: list[nn.Module] = []
-        in_features = self.partition_features + feedback_features
-        for width in step_widths:
-            layers.append(
-                InputWiseLogicLayer(
-                    in_features,
-                    width,
-                    estimator=estimator,
-                    residual_init=residual_init,
-                    generator=generator,
+        class_layers: list[nn.ModuleList] = []
+        for _class_index in range(num_classes):
+            layers: list[nn.Module] = []
+            in_features = self.partition_features + feedback_features
+            for width in step_widths:
+                layers.append(
+                    InputWiseLogicLayer(
+                        in_features,
+                        width,
+                        estimator=estimator,
+                        residual_init=residual_init,
+                        generator=generator,
+                    )
                 )
-            )
-            in_features = width
+                in_features = width
+            class_layers.append(nn.ModuleList(layers))
 
-        self.step_layers = nn.ModuleList(layers)
+        self.step_layers = nn.ModuleList(class_layers)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         return thermometer_encode(x, self.thresholds)
 
-    def _step(self, x: torch.Tensor, *, discrete: bool) -> torch.Tensor:
-        for layer in self.step_layers:
+    def _step(self, x: torch.Tensor, layers: nn.ModuleList, *, discrete: bool) -> torch.Tensor:
+        for layer in layers:
             x = layer(x, discrete=discrete)
         return x
 
@@ -252,7 +255,7 @@ class LightDLGN2(nn.Module):
         partitions = encoded.split(self.partition_features, dim=1)
         logits: list[torch.Tensor] = []
 
-        for _class_index in range(self.num_classes):
+        for class_layers in self.step_layers:
             feedback = encoded.new_zeros((encoded.size(0), self.feedback_features))
             population = encoded.new_empty((encoded.size(0), self.population))
 
@@ -262,7 +265,7 @@ class LightDLGN2(nn.Module):
                 else:
                     step_input = partition
 
-                step_output = self._step(step_input, discrete=discrete)
+                step_output = self._step(step_input, class_layers, discrete=discrete)
                 if self.feedback_features > 0:
                     feedback = step_output[:, : self.feedback_features]
                     population = step_output[:, self.feedback_features :]
