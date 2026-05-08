@@ -61,9 +61,15 @@ uv run train2.py --dataset cifar10
 - `--steps-per-class`: number of input partitions processed for each class, default `4`
 - `--population`: output population per class, default `final profile width / num_classes`
 - `--feedback-features`: feedback state carried between partitions, default equal to `population`
-- `--step-widths`: comma-separated widths for each class-specific per-step logic stack
+- `--step-widths`: comma-separated widths for one shared class/step-conditioned per-step logic stack
 
 The final `--step-widths` value must equal `--feedback-features + --population`. If `--step-widths` is omitted, the script uses the dataset preset widths with the final width adjusted to satisfy that constraint.
+
+LightDLGN2 automatically appends one-hot class code inputs and one-hot step code inputs to the first layer at every class-step application. The same `--step-widths` stack is reused across all classes and steps.
+
+For example, with MNIST, `--steps-per-class 4`, `--population 512`, `--feedback-features 256`, and `--step-widths 4096,768`, the first layer receives `196 + 256 + 10 + 4 = 466` inputs, and the model stores `4096 + 768 = 4864` trainable gates total.
+
+LightDLGN2 checkpoints from earlier class-specific-stack experiments are not compatible with this shared-conditioned structure and should be retrained.
 
 Example smaller experimental run:
 

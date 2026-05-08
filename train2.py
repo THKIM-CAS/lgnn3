@@ -26,7 +26,7 @@ def default_population(final_width: int, num_classes: int) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train a staged Light DLGN2.")
+    parser = argparse.ArgumentParser(description="Train a shared conditioned staged Light DLGN2.")
     parser.add_argument("--dataset", choices=["mnist", "cifar10"], required=True)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts"))
@@ -40,7 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--step-widths",
         type=str,
         default=None,
-        help="comma-separated per-step layer widths; the final width must equal feedback_features + population",
+        help=(
+            "comma-separated widths for the shared class/step-conditioned per-step stack; "
+            "the final width must equal feedback_features + population"
+        ),
     )
     parser.add_argument("--thresholds", type=int, default=None)
     parser.add_argument("--tau", type=float, default=None)
@@ -186,6 +189,8 @@ def main() -> None:
                 "population": population,
                 "feedback_features": feedback_features,
                 "step_widths": step_widths,
+                "shared_step_layers": True,
+                "conditioning": "class_step_one_hot",
                 "num_thresholds": thresholds,
                 "tau": tau,
                 "estimator": args.estimator,
