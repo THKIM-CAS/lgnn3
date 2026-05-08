@@ -20,6 +20,8 @@ uv sync
 
 ## Train
 
+Train the standard `LightDLGN` model.
+
 MNIST:
 
 ```bash
@@ -45,9 +47,44 @@ Artifacts are written to `artifacts/<dataset>/`:
 - `last.pt`
 - `history.json`
 
+## Train LightDLGN2
+
+Train the staged `LightDLGN2` model with the corresponding training loop:
+
+```bash
+uv run train2.py --dataset mnist
+uv run train2.py --dataset cifar10
+```
+
+`train2.py` uses the same dataset presets, optimizer defaults, validation metrics, and checkpoint cadence as `train.py`. The LightDLGN2-specific architecture options are:
+
+- `--steps-per-class`: number of input partitions processed for each class, default `4`
+- `--population`: output population per class, default `final profile width / num_classes`
+- `--feedback-features`: feedback state carried between partitions, default equal to `population`
+- `--step-widths`: comma-separated widths for the reused per-step logic stack
+
+The final `--step-widths` value must equal `--feedback-features + --population`. If `--step-widths` is omitted, the script uses the dataset preset widths with the final width adjusted to satisfy that constraint.
+
+Example smaller experimental run:
+
+```bash
+uv run train2.py \
+  --dataset mnist \
+  --epochs 5 \
+  --population 256 \
+  --feedback-features 64 \
+  --step-widths 2048,320
+```
+
+LightDLGN2 artifacts are written separately to `artifacts/light_dlgn2/<dataset>/`:
+
+- `best.pt`
+- `last.pt`
+- `history.json`
+
 ## Test
 
-Evaluate the best checkpoint on the official test split:
+Evaluate a standard `LightDLGN` checkpoint on the official test split:
 
 ```bash
 uv run test.py --checkpoint artifacts/mnist/best.pt
@@ -89,6 +126,7 @@ src/light_dlgn/data.py       # MNIST/CIFAR-10 loaders
 src/light_dlgn/config.py     # dataset presets
 src/light_dlgn/export_verilog.py  # discrete netlist to Verilog exporter
 train.py                     # training entry point
+train2.py                    # LightDLGN2 training entry point
 test.py                      # evaluation entry point
 export_verilog.py            # Verilog export entry point
 ```
