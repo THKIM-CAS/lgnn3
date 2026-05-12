@@ -24,6 +24,7 @@ This project pins PyTorch to the CUDA 12.1 wheel line on Linux x86_64:
 
 - `torch==2.5.1+cu121`
 - `torchvision==0.20.1+cu121`
+- `nvidia-cudnn-cu12==9.1.0.70`
 
 That build is compatible with NVIDIA 535-series drivers that report CUDA `12.2`, so no driver update is required. Use Python 3.11 or 3.12 on the GPU machine, then run:
 
@@ -38,6 +39,12 @@ uv run python -c "import torch; print(torch.__version__); print(torch.version.cu
 ```
 
 Expected output includes `2.5.1+cu121`, `12.1`, and `True`.
+
+If `import torch` fails with `ImportError: libcudnn.so.9: cannot open shared object file`, the virtualenv is missing the cuDNN wheel or still has stale torch packages. Reinstall the CUDA runtime packages from the lockfile:
+
+```bash
+uv sync --reinstall-package nvidia-cudnn-cu12 --reinstall-package torch --reinstall-package torchvision
+```
 
 Use `--device auto` or `--device cuda` once this prints `True`.
 

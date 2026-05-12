@@ -11,6 +11,7 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "torch==2.5.1",
     "torchvision==0.20.1",
+    "nvidia-cudnn-cu12==9.1.0.70; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "tqdm>=4.66",
 ]
 
