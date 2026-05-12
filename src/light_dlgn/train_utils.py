@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn
@@ -65,3 +66,38 @@ def save_checkpoint(path: Path, payload: dict) -> None:
 def save_history(path: Path, history: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+
+def init_wandb_run(config: dict[str, Any], *, project: str = "light-dlgn") -> Any | None:
+    try:
+        import wandb
+    except ModuleNotFoundError:
+        print("wandb is not installed; skipping wandb logging.")
+        return None
+    except Exception as exc:
+        print(f"wandb could not be imported; skipping wandb logging: {exc}")
+        return None
+
+    try:
+        return wandb.init(project=project, config=config)
+    except Exception as exc:
+        print(f"wandb initialization failed; skipping wandb logging: {exc}")
+        return None
+
+
+def log_wandb_metrics(run: Any | None, metrics: dict[str, float | int], *, step: int) -> None:
+    if run is None:
+        return
+    try:
+        run.log(metrics, step=step)
+    except Exception as exc:
+        print(f"wandb logging failed; continuing without blocking training: {exc}")
+
+
+def finish_wandb_run(run: Any | None) -> None:
+    if run is None:
+        return
+    try:
+        run.finish()
+    except Exception as exc:
+        print(f"wandb finish failed: {exc}")

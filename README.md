@@ -39,6 +39,19 @@ uv run train.py --dataset cifar10 --widths 12000,12000,12000,12000 --epochs 50
 uv run train.py --dataset mnist --estimator sigmoid
 ```
 
+If `wandb` is installed, training automatically logs config and per-epoch metrics to a Weights & Biases run:
+
+```bash
+uv add wandb
+uv run train.py --dataset mnist
+```
+
+When `wandb` is not installed, training skips wandb logging and continues normally. To keep `wandb` installed but disable upload for a run, use:
+
+```bash
+WANDB_MODE=disabled uv run train.py --dataset mnist
+```
+
 Artifacts are written to `artifacts/<dataset>/`:
 
 - `best.pt`

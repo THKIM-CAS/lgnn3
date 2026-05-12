@@ -10,7 +10,16 @@ from tqdm.auto import tqdm
 from light_dlgn.config import get_dataset_profile
 from light_dlgn.data import build_dataloaders
 from light_dlgn.model import LightDLGN
-from light_dlgn.train_utils import choose_device, evaluate, save_checkpoint, save_history, seed_everything
+from light_dlgn.train_utils import (
+    choose_device,
+    evaluate,
+    finish_wandb_run,
+    init_wandb_run,
+    log_wandb_metrics,
+    save_checkpoint,
+    save_history,
+    seed_everything,
+)
 
 
 def parse_widths(raw: str | None, default: tuple[int, ...]) -> tuple[int, ...]:
@@ -80,107 +89,151 @@ def main() -> None:
     history: list[dict] = []
     best_discrete_val = float("-inf")
 
-    for epoch in range(1, epochs + 1):
-        model.train()
-        running_loss = 0.0
-        running_correct = 0
-        running_examples = 0
-
-        progress = tqdm(loaders.train, desc=f"epoch {epoch}/{epochs}", leave=False)
-        for images, targets in progress:
-            images = images.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-
-            optimizer.zero_grad(set_to_none=True)
-            logits = model(images, discrete=False)
-            loss = criterion(logits, targets)
-            loss.backward()
-            optimizer.step()
-
-            batch_size_now = targets.size(0)
-            running_loss += loss.item() * batch_size_now
-            running_correct += (logits.argmax(dim=1) == targets).sum().item()
-            running_examples += batch_size_now
-            progress.set_postfix(
-                loss=f"{running_loss / running_examples:.4f}",
-                acc=f"{running_correct / running_examples:.4f}",
-            )
-
-        train_metrics = {
-            "loss": running_loss / running_examples,
-            "accuracy": running_correct / running_examples,
-        }
-        if loaders.val is None:
-            val_continuous = None
-            val_discrete = None
-        else:
-            val_continuous = evaluate(
-                model,
-                loaders.val,
-                device=device,
-                criterion=criterion,
-                discrete=False,
-            )
-            val_discrete = evaluate(
-                model,
-                loaders.val,
-                device=device,
-                criterion=criterion,
-                discrete=True,
-            )
-
-        epoch_metrics = {
-            "epoch": epoch,
-            "train": train_metrics,
-            "val_continuous": val_continuous,
-            "val_discrete": val_discrete,
-        }
-        history.append(epoch_metrics)
-
-        if val_continuous is None or val_discrete is None:
-            print(
-                f"epoch={epoch} "
-                f"train_loss={train_metrics['loss']:.4f} "
-                f"train_acc={train_metrics['accuracy']:.4f}"
-            )
-        else:
-            print(
-                f"epoch={epoch} "
-                f"train_loss={train_metrics['loss']:.4f} train_acc={train_metrics['accuracy']:.4f} "
-                f"val_cont_loss={val_continuous['loss']:.4f} val_cont_acc={val_continuous['accuracy']:.4f} "
-                f"val_disc_loss={val_discrete['loss']:.4f} val_disc_acc={val_discrete['accuracy']:.4f}"
-            )
-
-        checkpoint = {
+    wandb_run = init_wandb_run(
+        {
             "dataset": args.dataset,
-            "model_config": {
-                "image_shape": profile.image_shape,
-                "num_classes": profile.num_classes,
-                "widths": widths,
-                "num_thresholds": thresholds,
-                "tau": tau,
-                "estimator": args.estimator,
-                "residual_init": not args.disable_residual_init,
-                "seed": args.seed,
-            },
-            "train_config": {
-                "epochs": epochs,
-                "batch_size": batch_size,
-                "lr": lr,
-                "val_fraction": val_fraction,
-            },
-            "epoch": epoch,
-            "history": history,
-            "model_state": model.state_dict(),
+            "image_shape": profile.image_shape,
+            "num_classes": profile.num_classes,
+            "widths": widths,
+            "thresholds": thresholds,
+            "tau": tau,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "lr": lr,
+            "val_fraction": val_fraction,
+            "estimator": args.estimator,
+            "residual_init": not args.disable_residual_init,
+            "seed": args.seed,
+            "device": str(device),
         }
-        save_checkpoint(run_dir / "last.pt", checkpoint)
+    )
 
-        metric_for_best = train_metrics["accuracy"] if val_discrete is None else val_discrete["accuracy"]
-        if metric_for_best > best_discrete_val:
-            best_discrete_val = metric_for_best
-            save_checkpoint(run_dir / "best.pt", checkpoint)
+    try:
+        for epoch in range(1, epochs + 1):
+            model.train()
+            running_loss = 0.0
+            running_correct = 0
+            running_examples = 0
 
-    save_history(run_dir / "history.json", history)
+            progress = tqdm(loaders.train, desc=f"epoch {epoch}/{epochs}", leave=False)
+            for images, targets in progress:
+                images = images.to(device, non_blocking=True)
+                targets = targets.to(device, non_blocking=True)
+
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(images, discrete=False)
+                loss = criterion(logits, targets)
+                loss.backward()
+                optimizer.step()
+
+                batch_size_now = targets.size(0)
+                running_loss += loss.item() * batch_size_now
+                running_correct += (logits.argmax(dim=1) == targets).sum().item()
+                running_examples += batch_size_now
+                progress.set_postfix(
+                    loss=f"{running_loss / running_examples:.4f}",
+                    acc=f"{running_correct / running_examples:.4f}",
+                )
+
+            train_metrics = {
+                "loss": running_loss / running_examples,
+                "accuracy": running_correct / running_examples,
+            }
+            if loaders.val is None:
+                val_continuous = None
+                val_discrete = None
+            else:
+                val_continuous = evaluate(
+                    model,
+                    loaders.val,
+                    device=device,
+                    criterion=criterion,
+                    discrete=False,
+                )
+                val_discrete = evaluate(
+                    model,
+                    loaders.val,
+                    device=device,
+                    criterion=criterion,
+                    discrete=True,
+                )
+
+            epoch_metrics = {
+                "epoch": epoch,
+                "train": train_metrics,
+                "val_continuous": val_continuous,
+                "val_discrete": val_discrete,
+            }
+            history.append(epoch_metrics)
+
+            if val_continuous is None or val_discrete is None:
+                print(
+                    f"epoch={epoch} "
+                    f"train_loss={train_metrics['loss']:.4f} "
+                    f"train_acc={train_metrics['accuracy']:.4f}"
+                )
+            else:
+                print(
+                    f"epoch={epoch} "
+                    f"train_loss={train_metrics['loss']:.4f} train_acc={train_metrics['accuracy']:.4f} "
+                    f"val_cont_loss={val_continuous['loss']:.4f} val_cont_acc={val_continuous['accuracy']:.4f} "
+                    f"val_disc_loss={val_discrete['loss']:.4f} val_disc_acc={val_discrete['accuracy']:.4f}"
+                )
+
+            checkpoint = {
+                "dataset": args.dataset,
+                "model_config": {
+                    "image_shape": profile.image_shape,
+                    "num_classes": profile.num_classes,
+                    "widths": widths,
+                    "num_thresholds": thresholds,
+                    "tau": tau,
+                    "estimator": args.estimator,
+                    "residual_init": not args.disable_residual_init,
+                    "seed": args.seed,
+                },
+                "train_config": {
+                    "epochs": epochs,
+                    "batch_size": batch_size,
+                    "lr": lr,
+                    "val_fraction": val_fraction,
+                },
+                "epoch": epoch,
+                "history": history,
+                "model_state": model.state_dict(),
+            }
+            save_checkpoint(run_dir / "last.pt", checkpoint)
+
+            metric_for_best = train_metrics["accuracy"] if val_discrete is None else val_discrete["accuracy"]
+            if metric_for_best > best_discrete_val:
+                best_discrete_val = metric_for_best
+                save_checkpoint(run_dir / "best.pt", checkpoint)
+
+            wandb_metrics = {
+                "epoch": epoch,
+                "train/loss": train_metrics["loss"],
+                "train/accuracy": train_metrics["accuracy"],
+                "best/metric": best_discrete_val,
+            }
+            if val_continuous is not None:
+                wandb_metrics.update(
+                    {
+                        "val_continuous/loss": val_continuous["loss"],
+                        "val_continuous/accuracy": val_continuous["accuracy"],
+                    }
+                )
+            if val_discrete is not None:
+                wandb_metrics.update(
+                    {
+                        "val_discrete/loss": val_discrete["loss"],
+                        "val_discrete/accuracy": val_discrete["accuracy"],
+                    }
+                )
+            log_wandb_metrics(wandb_run, wandb_metrics, step=epoch)
+
+        save_history(run_dir / "history.json", history)
+    finally:
+        finish_wandb_run(wandb_run)
 
 
 if __name__ == "__main__":
