@@ -18,6 +18,24 @@ source .venv/bin/activate
 uv sync
 ```
 
+### GPU Setup With Older NVIDIA Drivers
+
+If the GPU machine reports an older CUDA driver, for example PyTorch says the driver supports CUDA `12.2` but the installed PyTorch build is `+cu130`, reinstall PyTorch with a compatible CUDA wheel on that machine:
+
+```bash
+uv pip install --force-reinstall \
+  torch==2.5.1 torchvision==0.20.1 \
+  --index-url https://download.pytorch.org/whl/cu121
+```
+
+Then verify that PyTorch can see the GPU:
+
+```bash
+uv run python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
+```
+
+Use `--device auto` or `--device cuda` once this prints `True`.
+
 ## Train
 
 MNIST:

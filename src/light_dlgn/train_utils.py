@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import random
+import warnings
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -9,16 +11,37 @@ import torch
 from torch import nn
 
 
+@lru_cache(maxsize=1)
+def cuda_is_available() -> bool:
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always", UserWarning)
+        available = torch.cuda.is_available()
+
+    cuda_init_warnings = [
+        warning for warning in caught_warnings if "CUDA initialization:" in str(warning.message)
+    ]
+    if not available and cuda_init_warnings:
+        print(
+            "CUDA is installed but unavailable to PyTorch. If this machine has an older NVIDIA driver, "
+            "install a PyTorch build compiled for a compatible CUDA runtime, such as cu121."
+        )
+    return available
+
+
+def reset_cuda_availability_cache() -> None:
+    cuda_is_available.cache_clear()
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
+    if cuda_is_available():
         torch.cuda.manual_seed_all(seed)
 
 
 def choose_device(requested: str) -> torch.device:
     if requested == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return torch.device("cuda" if cuda_is_available() else "cpu")
     return torch.device(requested)
 
 
