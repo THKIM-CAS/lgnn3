@@ -18,14 +18,17 @@ source .venv/bin/activate
 uv sync
 ```
 
-### GPU Setup With Older NVIDIA Drivers
+### GPU Setup With CUDA 12.2 Drivers
 
-If the GPU machine reports an older CUDA driver, for example PyTorch says the driver supports CUDA `12.2` but the installed PyTorch build is `+cu130`, reinstall PyTorch with a compatible CUDA wheel on that machine:
+This project pins PyTorch to the CUDA 12.1 wheel line on Linux x86_64:
+
+- `torch==2.5.1+cu121`
+- `torchvision==0.20.1+cu121`
+
+That build is compatible with NVIDIA 535-series drivers that report CUDA `12.2`, so no driver update is required. Use Python 3.11 or 3.12 on the GPU machine, then run:
 
 ```bash
-uv pip install --force-reinstall \
-  torch==2.5.1 torchvision==0.20.1 \
-  --index-url https://download.pytorch.org/whl/cu121
+uv sync
 ```
 
 Then verify that PyTorch can see the GPU:
@@ -33,6 +36,8 @@ Then verify that PyTorch can see the GPU:
 ```bash
 uv run python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
 ```
+
+Expected output includes `2.5.1+cu121`, `12.1`, and `True`.
 
 Use `--device auto` or `--device cuda` once this prints `True`.
 
