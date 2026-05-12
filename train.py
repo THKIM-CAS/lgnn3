@@ -15,6 +15,7 @@ from light_dlgn.train_utils import (
     evaluate,
     finish_wandb_run,
     init_wandb_run,
+    log_wandb_artifact,
     log_wandb_metrics,
     save_checkpoint,
     save_history,
@@ -86,6 +87,10 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss()
 
     run_dir = args.output_dir / args.dataset
+    best_checkpoint_path = run_dir / "best.pt"
+    last_checkpoint_path = run_dir / "last.pt"
+    history_path = run_dir / "history.json"
+    wandb_artifact_name = f"light-dlgn-{args.dataset}"
     history: list[dict] = []
     best_discrete_val = float("-inf")
 
@@ -202,12 +207,25 @@ def main() -> None:
                 "history": history,
                 "model_state": model.state_dict(),
             }
-            save_checkpoint(run_dir / "last.pt", checkpoint)
+            save_checkpoint(last_checkpoint_path, checkpoint)
 
             metric_for_best = train_metrics["accuracy"] if val_discrete is None else val_discrete["accuracy"]
             if metric_for_best > best_discrete_val:
                 best_discrete_val = metric_for_best
-                save_checkpoint(run_dir / "best.pt", checkpoint)
+                save_checkpoint(best_checkpoint_path, checkpoint)
+                log_wandb_artifact(
+                    wandb_run,
+                    name=wandb_artifact_name,
+                    artifact_type="model",
+                    files=[best_checkpoint_path],
+                    aliases=["best", f"epoch-{epoch}"],
+                    metadata={
+                        "dataset": args.dataset,
+                        "checkpoint": "best",
+                        "epoch": epoch,
+                        "metric": best_discrete_val,
+                    },
+                )
 
             wandb_metrics = {
                 "epoch": epoch,
@@ -231,7 +249,20 @@ def main() -> None:
                 )
             log_wandb_metrics(wandb_run, wandb_metrics, step=epoch)
 
-        save_history(run_dir / "history.json", history)
+        save_history(history_path, history)
+        log_wandb_artifact(
+            wandb_run,
+            name=wandb_artifact_name,
+            artifact_type="model",
+            files=[last_checkpoint_path, history_path],
+            aliases=["last"],
+            metadata={
+                "dataset": args.dataset,
+                "checkpoint": "last",
+                "epoch": epochs,
+                "best_metric": best_discrete_val,
+            },
+        )
     finally:
         finish_wandb_run(wandb_run)
 

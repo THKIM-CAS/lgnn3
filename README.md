@@ -82,6 +82,8 @@ When `wandb` is not installed, training skips wandb logging and continues normal
 WANDB_MODE=disabled uv run train.py --dataset mnist
 ```
 
+When `wandb` is enabled, improved `best.pt` checkpoints are uploaded as model artifacts with the `best` alias and an `epoch-<N>` alias. At the end of training, `last.pt` and `history.json` are uploaded with the `last` alias.
+
 Artifacts are written to `artifacts/<dataset>/`:
 
 - `best.pt`

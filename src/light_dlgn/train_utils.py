@@ -117,6 +117,28 @@ def log_wandb_metrics(run: Any | None, metrics: dict[str, float | int], *, step:
         print(f"wandb logging failed; continuing without blocking training: {exc}")
 
 
+def log_wandb_artifact(
+    run: Any | None,
+    *,
+    name: str,
+    artifact_type: str,
+    files: list[Path],
+    aliases: list[str],
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if run is None:
+        return
+    try:
+        import wandb
+
+        artifact = wandb.Artifact(name=name, type=artifact_type, metadata=metadata)
+        for file_path in files:
+            artifact.add_file(str(file_path))
+        run.log_artifact(artifact, aliases=aliases)
+    except Exception as exc:
+        print(f"wandb artifact logging failed; continuing without blocking training: {exc}")
+
+
 def finish_wandb_run(run: Any | None) -> None:
     if run is None:
         return
