@@ -16,6 +16,28 @@ def _heavy_tail_parameters(estimator: str) -> tuple[float, float]:
     raise ValueError(f"unsupported estimator '{estimator}'")
 
 
+def _sample_connections(
+    in_features: int, out_features: int, generator: torch.Generator | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Balanced random wiring: every input is used floor/ceil(2*out/in) times, and no gate reads one input twice."""
+    if in_features < 2:
+        raise ValueError("in_features must be at least 2 to wire two distinct inputs per gate")
+
+    n = 2 * out_features
+    reps = -(-n // in_features)
+    pool = torch.cat([torch.randperm(in_features, generator=generator) for _ in range(reps)])[:n]
+    pool = pool[torch.randperm(n, generator=generator)]
+    left, right = pool[:out_features].clone(), pool[out_features:].clone()
+
+    # Repair the few self-connections by swapping right inputs with other gates; swaps keep usage counts balanced.
+    for i in (left == right).nonzero().flatten().tolist():
+        while left[i] == right[i]:
+            j = int(torch.randint(0, out_features, (1,), generator=generator))
+            if left[j] != right[i] and left[i] != right[j]:
+                right[i], right[j] = right[j].clone(), right[i].clone()
+    return left, right
+
+
 class InputWiseLogicLayer(nn.Module):
     """Binary-input DLGN layer using the paper's input-wise parametrization."""
 
@@ -34,12 +56,7 @@ class InputWiseLogicLayer(nn.Module):
         self.estimator = estimator
         self.residual_init = residual_init
 
-        left = torch.randint(0, in_features, (out_features,), generator=generator)
-        right = torch.randint(0, in_features, (out_features,), generator=generator)
-        same = left == right
-        if same.any():
-            right[same] = (right[same] + 1) % in_features
-
+        left, right = _sample_connections(in_features, out_features, generator)
         self.register_buffer("left_indices", left, persistent=True)
         self.register_buffer("right_indices", right, persistent=True)
         self.logits = nn.Parameter(torch.empty(out_features, 4))
