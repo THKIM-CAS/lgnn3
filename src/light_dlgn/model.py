@@ -38,27 +38,20 @@ def _sample_connections(
     return left, right
 
 
-class InputWiseLogicLayer(nn.Module):
-    """Binary-input DLGN layer using the paper's input-wise parametrization."""
+class _TruthTableGates(nn.Module):
+    """Trainable two-input truth tables shared by logic-layer implementations."""
 
     def __init__(
         self,
-        in_features: int,
         out_features: int,
         *,
         estimator: str = "sinusoidal",
         residual_init: bool = True,
-        generator: torch.Generator | None = None,
     ) -> None:
         super().__init__()
-        self.in_features = in_features
         self.out_features = out_features
         self.estimator = estimator
         self.residual_init = residual_init
-
-        left, right = _sample_connections(in_features, out_features, generator)
-        self.register_buffer("left_indices", left, persistent=True)
-        self.register_buffer("right_indices", right, persistent=True)
         self.logits = nn.Parameter(torch.empty(out_features, 4))
         self.reset_parameters()
 
@@ -85,9 +78,7 @@ class InputWiseLogicLayer(nn.Module):
             return (omega > 0.5).to(dtype=omega.dtype)
         return omega
 
-    def forward(self, x: torch.Tensor, *, discrete: bool = False) -> torch.Tensor:
-        left = x.index_select(1, self.left_indices)
-        right = x.index_select(1, self.right_indices)
+    def forward(self, left: torch.Tensor, right: torch.Tensor, *, discrete: bool = False) -> torch.Tensor:
         omega = self._coefficients(discrete)
         w00 = omega[:, 0].unsqueeze(0)
         w01 = omega[:, 1].unsqueeze(0)
@@ -99,6 +90,106 @@ class InputWiseLogicLayer(nn.Module):
             + left * (1.0 - right) * w10
             + left * right * w11
         )
+
+
+class InputWiseLogicLayer(_TruthTableGates):
+    """Binary-input DLGN layer using the paper's input-wise parametrization."""
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        estimator: str = "sinusoidal",
+        residual_init: bool = True,
+        generator: torch.Generator | None = None,
+    ) -> None:
+        super().__init__(
+            out_features,
+            estimator=estimator,
+            residual_init=residual_init,
+        )
+        self.in_features = in_features
+
+        left, right = _sample_connections(in_features, out_features, generator)
+        self.register_buffer("left_indices", left, persistent=True)
+        self.register_buffer("right_indices", right, persistent=True)
+
+    def forward(self, x: torch.Tensor, *, discrete: bool = False) -> torch.Tensor:
+        left = x.index_select(1, self.left_indices)
+        right = x.index_select(1, self.right_indices)
+        return super().forward(left, right, discrete=discrete)
+
+
+class LogicTree(nn.Module):
+    """Tournament-style logic tree with learned gates and sports-style byes.
+
+    ``out_features`` must be reachable by repeatedly pairing adjacent values and
+    advancing an unpaired final value to the next round.  For example, a tree
+    with five inputs can expose widths 5, 3, 2, or 1.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        estimator: str = "sinusoidal",
+        residual_init: bool = True,
+    ) -> None:
+        super().__init__()
+        if in_features < 1 or out_features < 1:
+            raise ValueError("in_features and out_features must both be at least 1")
+
+        reachable_widths = [in_features]
+        width = in_features
+        while width > 1:
+            width = (width + 1) // 2
+            reachable_widths.append(width)
+        if out_features not in reachable_widths:
+            choices = ", ".join(str(value) for value in reachable_widths)
+            raise ValueError(
+                f"out_features={out_features} is not reachable from in_features={in_features}; "
+                f"choose one of: {choices}"
+            )
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.estimator = estimator
+        self.residual_init = residual_init
+
+        levels: list[nn.Module] = []
+        width = in_features
+        while width != out_features:
+            levels.append(
+                _TruthTableGates(
+                    width // 2,
+                    estimator=estimator,
+                    residual_init=residual_init,
+                )
+            )
+            width = (width + 1) // 2
+        self.logic_levels = nn.ModuleList(levels)
+
+    def forward(self, x: torch.Tensor, *, discrete: bool = False) -> torch.Tensor:
+        if x.ndim != 2 or x.size(1) != self.in_features:
+            raise ValueError(
+                f"expected x with shape (batch_size, {self.in_features}), got {tuple(x.shape)}"
+            )
+
+        values = x
+        for level in self.logic_levels:
+            paired_width = 2 * level.out_features
+            gates = level(
+                values[:, :paired_width:2],
+                values[:, 1:paired_width:2],
+                discrete=discrete,
+            )
+            if values.size(1) % 2:
+                values = torch.cat((gates, values[:, -1:]), dim=1)
+            else:
+                values = gates
+        return values
 
 
 class GroupSum(nn.Module):
