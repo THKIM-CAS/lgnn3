@@ -69,6 +69,12 @@ uv run train.py --dataset cifar10 --widths 12000,12000,12000,12000 --epochs 50
 uv run train.py --dataset mnist --estimator sigmoid
 ```
 
+`--widths` also accepts grouped logic-tree layers as `(num_groups,tree_outputs)` entries. Quote the value so the shell preserves parentheses. For example, this creates `300 → 20 → 100 → 100`, with ten independent trees reducing contiguous 30-feature groups to two outputs each:
+
+```bash
+uv run train.py --dataset mnist --widths '300,(10,2),100,100' --epochs 2
+```
+
 If `wandb` is installed, training automatically logs config and per-epoch metrics to a Weights & Biases run:
 
 ```bash

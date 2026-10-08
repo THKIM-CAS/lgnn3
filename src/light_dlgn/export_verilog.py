@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from .model import InputWiseLogicLayer, LightDLGN
+from .model import InputWiseLogicLayer, LightDLGN, LogicTreeLayer
 
 
 @dataclass(frozen=True)
@@ -22,10 +22,12 @@ class LogicNetlist:
     layer_widths: tuple[int, ...]
     num_classes: int
     gates_by_layer: tuple[tuple[DiscreteGate, ...], ...]
+    output_width: int | None = None
 
     @property
     def group_size(self) -> int:
-        return self.layer_widths[-1] // self.num_classes
+        final_width = self.layer_widths[-1] if self.output_width is None else self.output_width
+        return final_width // self.num_classes
 
 
 _TRUTH_TABLE_TO_EXPR: dict[tuple[int, int, int, int], str] = {
@@ -83,13 +85,68 @@ def _layer_to_discrete_gates(layer: InputWiseLogicLayer) -> tuple[DiscreteGate, 
     return tuple(gates)
 
 
+def _tree_layer_to_discrete_gate_levels(
+    layer: LogicTreeLayer,
+) -> tuple[tuple[DiscreteGate, ...], ...]:
+    """Lower a grouped tree layer into tournament rounds of ordinary gates.
+
+    An odd group's bye is represented as an identity truth-table gate so every
+    exported round still has a concrete output wire for each value.
+    """
+    identity_truth_table = (0, 0, 1, 1)
+    current_tree_width = layer.tree_in_features
+    gate_levels: list[tuple[DiscreteGate, ...]] = []
+
+    for level_index in range(len(layer.logic_trees[0].logic_levels)):
+        gates: list[DiscreteGate] = []
+        for group_index, tree in enumerate(layer.logic_trees):
+            truth_table_gates = tree.logic_levels[level_index]
+            group_offset = group_index * current_tree_width
+            omega = truth_table_gates._coefficients(discrete=True).to(dtype=torch.int64).cpu()
+            for gate_index in range(truth_table_gates.out_features):
+                truth_table = tuple(int(bit) for bit in omega[gate_index].tolist())
+                gates.append(
+                    DiscreteGate(
+                        left_index=group_offset + 2 * gate_index,
+                        right_index=group_offset + 2 * gate_index + 1,
+                        truth_table=truth_table,
+                    )
+                )
+            if current_tree_width % 2:
+                bye_index = group_offset + current_tree_width - 1
+                gates.append(
+                    DiscreteGate(
+                        left_index=bye_index,
+                        right_index=bye_index,
+                        truth_table=identity_truth_table,
+                    )
+                )
+        gate_levels.append(tuple(gates))
+        current_tree_width = (current_tree_width + 1) // 2
+    return tuple(gate_levels)
+
+
 def extract_logic_netlist(model: LightDLGN) -> LogicNetlist:
-    gates_by_layer = tuple(_layer_to_discrete_gates(layer) for layer in model.logic_layers)
+    gates_by_layer: list[tuple[DiscreteGate, ...]] = []
+    layer_widths: list[int] = []
+    for layer in model.logic_layers:
+        if isinstance(layer, InputWiseLogicLayer):
+            gates = _layer_to_discrete_gates(layer)
+            gates_by_layer.append(gates)
+            layer_widths.append(len(gates))
+        elif isinstance(layer, LogicTreeLayer):
+            tree_gate_levels = _tree_layer_to_discrete_gate_levels(layer)
+            gates_by_layer.extend(tree_gate_levels)
+            layer_widths.extend(len(gates) for gates in tree_gate_levels)
+        else:
+            raise TypeError(f"unsupported logic layer type {type(layer).__name__}")
+
     return LogicNetlist(
         encoded_dim=math.prod(model.image_shape) * model.num_thresholds,
-        layer_widths=tuple(model.widths),
+        layer_widths=tuple(layer_widths),
         num_classes=model.num_classes,
-        gates_by_layer=gates_by_layer,
+        gates_by_layer=tuple(gates_by_layer),
+        output_width=model.logic_layers[-1].out_features,
     )
 
 

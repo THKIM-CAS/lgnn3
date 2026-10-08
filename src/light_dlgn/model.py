@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import math
+from typing import TypeAlias
 
 import torch
 from torch import nn
 
 from .encoding import make_thresholds, thermometer_encode
+
+
+WidthSpec: TypeAlias = int | tuple[int, int]
 
 
 def _heavy_tail_parameters(estimator: str) -> tuple[float, float]:
@@ -192,6 +196,54 @@ class LogicTree(nn.Module):
         return values
 
 
+class LogicTreeLayer(nn.Module):
+    """Apply independent logic trees to contiguous, non-overlapping input groups."""
+
+    def __init__(
+        self,
+        in_features: int,
+        num_groups: int,
+        tree_out_features: int,
+        *,
+        estimator: str = "sinusoidal",
+        residual_init: bool = True,
+    ) -> None:
+        super().__init__()
+        if in_features < 1 or num_groups < 1 or tree_out_features < 1:
+            raise ValueError("in_features, num_groups, and tree_out_features must all be at least 1")
+        if in_features % num_groups != 0:
+            raise ValueError(
+                f"in_features={in_features} must be divisible by num_groups={num_groups}"
+            )
+
+        self.in_features = in_features
+        self.num_groups = num_groups
+        self.tree_in_features = in_features // num_groups
+        self.tree_out_features = tree_out_features
+        self.out_features = num_groups * tree_out_features
+
+        self.logic_trees = nn.ModuleList(
+            LogicTree(
+                self.tree_in_features,
+                tree_out_features,
+                estimator=estimator,
+                residual_init=residual_init,
+            )
+            for _ in range(num_groups)
+        )
+
+    def forward(self, x: torch.Tensor, *, discrete: bool = False) -> torch.Tensor:
+        if x.ndim != 2 or x.size(1) != self.in_features:
+            raise ValueError(
+                f"expected x with shape (batch_size, {self.in_features}), got {tuple(x.shape)}"
+            )
+        chunks = x.split(self.tree_in_features, dim=1)
+        return torch.cat(
+            [tree(chunk, discrete=discrete) for tree, chunk in zip(self.logic_trees, chunks, strict=True)],
+            dim=1,
+        )
+
+
 class GroupSum(nn.Module):
     def __init__(self, num_classes: int, tau: float) -> None:
         super().__init__()
@@ -212,7 +264,7 @@ class LightDLGN(nn.Module):
         self,
         image_shape: tuple[int, int, int],
         num_classes: int,
-        widths: tuple[int, ...],
+        widths: tuple[WidthSpec, ...],
         *,
         num_thresholds: int,
         tau: float,
@@ -223,12 +275,35 @@ class LightDLGN(nn.Module):
         super().__init__()
         if not widths:
             raise ValueError("widths must not be empty")
-        if widths[-1] % num_classes != 0:
-            raise ValueError("last width must be divisible by num_classes")
+
+        normalized_widths: list[WidthSpec] = []
+        output_widths: list[int] = []
+        for width in widths:
+            if isinstance(width, int):
+                if width < 1:
+                    raise ValueError("integer layer widths must be at least 1")
+                normalized_widths.append(width)
+                output_widths.append(width)
+            elif (
+                isinstance(width, tuple)
+                and len(width) == 2
+                and all(isinstance(value, int) for value in width)
+            ):
+                num_groups, tree_out_features = width
+                if num_groups < 1 or tree_out_features < 1:
+                    raise ValueError("LogicTreeLayer width values must both be at least 1")
+                normalized_widths.append(width)
+                output_widths.append(num_groups * tree_out_features)
+            else:
+                raise ValueError(
+                    "each width must be an integer or a (num_groups, tree_out_features) tuple"
+                )
+        if output_widths[-1] % num_classes != 0:
+            raise ValueError("final output width must be divisible by num_classes")
 
         self.image_shape = image_shape
         self.num_classes = num_classes
-        self.widths = tuple(widths)
+        self.widths = tuple(normalized_widths)
         self.num_thresholds = num_thresholds
         self.tau = tau
         self.estimator = estimator
@@ -242,17 +317,29 @@ class LightDLGN(nn.Module):
 
         layers: list[nn.Module] = []
         in_features = encoded_dim
-        for width in widths:
-            layers.append(
-                InputWiseLogicLayer(
-                    in_features,
-                    width,
-                    estimator=estimator,
-                    residual_init=residual_init,
-                    generator=generator,
+        for width, output_width in zip(self.widths, output_widths, strict=True):
+            if isinstance(width, int):
+                layers.append(
+                    InputWiseLogicLayer(
+                        in_features,
+                        width,
+                        estimator=estimator,
+                        residual_init=residual_init,
+                        generator=generator,
+                    )
                 )
-            )
-            in_features = width
+            else:
+                num_groups, tree_out_features = width
+                layers.append(
+                    LogicTreeLayer(
+                        in_features,
+                        num_groups,
+                        tree_out_features,
+                        estimator=estimator,
+                        residual_init=residual_init,
+                    )
+                )
+            in_features = output_width
 
         self.logic_layers = nn.ModuleList(layers)
         self.group_sum = GroupSum(num_classes=num_classes, tau=tau)

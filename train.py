@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from pathlib import Path
 
 import torch
@@ -9,7 +10,7 @@ from tqdm.auto import tqdm
 
 from light_dlgn.config import get_dataset_profile
 from light_dlgn.data import build_dataloaders
-from light_dlgn.model import LightDLGN
+from light_dlgn.model import LightDLGN, WidthSpec
 from light_dlgn.train_utils import (
     choose_device,
     evaluate,
@@ -23,10 +24,33 @@ from light_dlgn.train_utils import (
 )
 
 
-def parse_widths(raw: str | None, default: tuple[int, ...]) -> tuple[int, ...]:
+def parse_widths(raw: str | None, default: tuple[WidthSpec, ...]) -> tuple[WidthSpec, ...]:
     if raw is None:
         return default
-    return tuple(int(part.strip()) for part in raw.split(",") if part.strip())
+    try:
+        parsed = ast.literal_eval(f"({raw})")
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(
+            "widths must be comma-separated integers or (num_groups, tree_out_features) tuples"
+        ) from exc
+    if not parsed:
+        raise ValueError("widths must contain at least one layer specification")
+
+    widths: list[WidthSpec] = []
+    for width in parsed:
+        if isinstance(width, int):
+            widths.append(width)
+        elif (
+            isinstance(width, tuple)
+            and len(width) == 2
+            and all(isinstance(value, int) for value in width)
+        ):
+            widths.append(width)
+        else:
+            raise ValueError(
+                "each width must be an integer or a (num_groups, tree_out_features) tuple"
+            )
+    return tuple(widths)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,7 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
-    parser.add_argument("--widths", type=str, default=None, help="comma-separated layer widths")
+    parser.add_argument(
+        "--widths",
+        type=str,
+        default=None,
+        help="comma-separated widths; use (groups,tree_outputs) for a LogicTreeLayer",
+    )
     parser.add_argument("--thresholds", type=int, default=None)
     parser.add_argument("--tau", type=float, default=None)
     parser.add_argument("--val-fraction", type=float, default=None)
@@ -50,12 +79,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
     profile = get_dataset_profile(args.dataset)
     seed_everything(args.seed)
     device = choose_device(args.device)
 
-    widths = parse_widths(args.widths, profile.widths)
+    try:
+        widths = parse_widths(args.widths, profile.widths)
+    except ValueError as exc:
+        parser.error(str(exc))
     thresholds = args.thresholds if args.thresholds is not None else profile.thresholds
     tau = args.tau if args.tau is not None else profile.tau
     epochs = args.epochs if args.epochs is not None else profile.epochs
